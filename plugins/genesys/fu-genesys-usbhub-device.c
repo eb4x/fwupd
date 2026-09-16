@@ -205,7 +205,18 @@ fu_genesys_usbhub_device_mstar_scaler_setup(FuGenesysUsbhubDevice *self, GError 
 {
 	g_autoptr(FuGenesysScalerDevice) scaler_device =
 	    fu_genesys_scaler_device_new(FU_DEVICE(self));
+	g_autoptr(GError) error_local = NULL;
 
+	/* a hub tier without a scaler reports SIGNATURE_INVALID; any other failure also keeps the
+	 * hub, because the hub can be updated without the scaler */
+	if (!fu_device_setup(FU_DEVICE(scaler_device), &error_local)) {
+		if (g_error_matches(error_local, FWUPD_ERROR, FWUPD_ERROR_SIGNATURE_INVALID)) {
+			g_debug("ignoring MStar scaler: %s", error_local->message);
+		} else {
+			g_warning("MStar scaler failed to set up: %s", error_local->message);
+		}
+		return TRUE;
+	}
 	fu_device_add_child(FU_DEVICE(self), FU_DEVICE(scaler_device));
 
 	/* success */
