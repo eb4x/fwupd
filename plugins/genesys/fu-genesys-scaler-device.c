@@ -1466,11 +1466,11 @@ fu_genesys_scaler_device_get_ddcci_data(FuGenesysScalerDevice *self,
 					    NULL,	  /* actual length */
 					    GENESYS_SCALER_USB_TIMEOUT,
 					    error)) {
-		g_prefix_error_literal(error, "error setting dddci data: ");
+		g_prefix_error_literal(error, "error setting ddcci data: ");
 		return FALSE;
 	}
 
-	fu_device_sleep(FU_DEVICE(self), 100); /* 1ms */
+	fu_device_sleep(FU_DEVICE(self), 100); /* ms */
 
 	if (!fu_usb_device_control_transfer(FU_USB_DEVICE(proxy),
 					    FU_USB_DIRECTION_DEVICE_TO_HOST,
@@ -1484,7 +1484,7 @@ fu_genesys_scaler_device_get_ddcci_data(FuGenesysScalerDevice *self,
 					    NULL,   /* actual length */
 					    GENESYS_SCALER_USB_TIMEOUT,
 					    error)) {
-		g_prefix_error_literal(error, "error getting dddci data: ");
+		g_prefix_error_literal(error, "error getting ddcci data: ");
 		return FALSE;
 	}
 
@@ -1519,7 +1519,7 @@ fu_genesys_scaler_device_get_firmware_packet_version(FuGenesysScalerDevice *self
 			g_set_error(error,
 				    FWUPD_ERROR,
 				    FWUPD_ERROR_INTERNAL,
-				    "error dddci length too large, got 0x%x, expected <= 0x%zx",
+				    "error ddcci length too large, got 0x%x, expected <= 0x%zx",
 				    (guint)len,
 				    sizeof(buf));
 			return FALSE;
@@ -1534,7 +1534,7 @@ fu_genesys_scaler_device_get_firmware_packet_version(FuGenesysScalerDevice *self
 			g_set_error(error,
 				    FWUPD_ERROR,
 				    FWUPD_ERROR_INTERNAL,
-				    "error dddci checksum mismatch, got 0x%02x, expected 0x%02x",
+				    "error ddcci checksum mismatch, got 0x%02x, expected 0x%02x",
 				    checksum_tmp,
 				    checksum);
 			return FALSE;
