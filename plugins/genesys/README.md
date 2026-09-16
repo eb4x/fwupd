@@ -167,6 +167,7 @@ CFI Flash Id.
 
 * HP M24fd USB-C Monitor: `0xC22016`
 * HP M27fd USB-C Monitor: `0xC84016`
+* HP Z27k G3 USB-C Monitor: `0xC22016`
 
 Since 1.8.2.
 
