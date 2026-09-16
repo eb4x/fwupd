@@ -33,8 +33,9 @@
 
 #define GENESYS_SCALER_USB_TIMEOUT 5000 /* 5s */
 
-#define FU_SCALER_FLAG_PAUSE_R2_CPU "pause-r2-cpu"
-#define FU_SCALER_FLAG_USE_I2C_CH0  "use-i2c-ch0"
+#define FU_SCALER_FLAG_PAUSE_R2_CPU	"pause-r2-cpu"
+#define FU_SCALER_FLAG_USE_I2C_CH0	"use-i2c-ch0"
+#define FU_SCALER_FLAG_REPLUG_ON_ATTACH "replug-on-attach"
 
 typedef struct {
 	guint8 req_read;
@@ -754,10 +755,8 @@ fu_genesys_scaler_device_detach(FuDevice *device, FuProgress *progress, GError *
 }
 
 static gboolean
-fu_genesys_scaler_device_attach(FuDevice *device, FuProgress *progress, GError **error)
+fu_genesys_scaler_device_restore_normal_mode(FuGenesysScalerDevice *self, GError **error)
 {
-	FuGenesysScalerDevice *self = FU_GENESYS_SCALER_DEVICE(device);
-
 	if (!fu_genesys_scaler_device_exit_single_step_mode(self, error))
 		return FALSE;
 
@@ -766,6 +765,38 @@ fu_genesys_scaler_device_attach(FuDevice *device, FuProgress *progress, GError *
 
 	if (!fu_genesys_scaler_device_exit_isp_mode(self, error))
 		return FALSE;
+
+	/* success */
+	return TRUE;
+}
+
+static gboolean
+fu_genesys_scaler_device_attach(FuDevice *device, FuProgress *progress, GError **error)
+{
+	FuGenesysScalerDevice *self = FU_GENESYS_SCALER_DEVICE(device);
+	FuDevice *proxy;
+	g_autoptr(GError) error_local = NULL;
+
+	if (!fu_device_has_private_flag(device, FU_SCALER_FLAG_REPLUG_ON_ATTACH))
+		return fu_genesys_scaler_device_restore_normal_mode(self, error);
+
+	/* leaving ISP mode resets the scaler, and on some panels the hub re-enumerates too; the
+	 * reset can win the race with the hub acknowledging the request, so a transfer failure is
+	 * the expected outcome and the replug wait still fails the update if the devices do not
+	 * come back */
+	if (!fu_genesys_scaler_device_restore_normal_mode(self, &error_local)) {
+		if (!g_error_matches(error_local, FWUPD_ERROR, FWUPD_ERROR_READ) &&
+		    !g_error_matches(error_local, FWUPD_ERROR, FWUPD_ERROR_NOT_FOUND)) {
+			g_propagate_error(error, g_steal_pointer(&error_local));
+			return FALSE;
+		}
+		g_info("scaler reset before acknowledging: %s", error_local->message);
+	}
+	proxy = fu_device_get_proxy(device, error);
+	if (proxy == NULL)
+		return FALSE;
+	fu_device_add_flag(proxy, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG);
+	fu_device_add_flag(device, FWUPD_DEVICE_FLAG_WAIT_FOR_REPLUG);
 
 	/* success */
 	return TRUE;
@@ -1654,6 +1685,11 @@ fu_genesys_scaler_device_probe(FuDevice *device, GError **error)
 
 	fu_device_add_flag(device, FWUPD_DEVICE_FLAG_UPDATABLE);
 
+	/* WAIT_FOR_REPLUG needs a remove delay, and add_child() copies the largest delay of the
+	 * children to the hub */
+	if (fu_device_has_private_flag(device, FU_SCALER_FLAG_REPLUG_ON_ATTACH))
+		fu_device_set_remove_delay(device, FU_DEVICE_REMOVE_DELAY_RE_ENUMERATE);
+
 	self->vc.req_read = GENESYS_SCALER_MSTAR_READ;
 	self->vc.req_write = GENESYS_SCALER_MSTAR_WRITE;
 	if (self->level != 1) {
@@ -2047,6 +2083,7 @@ fu_genesys_scaler_device_class_init(FuGenesysScalerDeviceClass *klass)
 	device_class->set_quirk_kv = fu_genesys_scaler_device_set_quirk_kv;
 	fu_device_register_private_flag(device_class, FU_SCALER_FLAG_PAUSE_R2_CPU);
 	fu_device_register_private_flag(device_class, FU_SCALER_FLAG_USE_I2C_CH0);
+	fu_device_register_private_flag(device_class, FU_SCALER_FLAG_REPLUG_ON_ATTACH);
 }
 
 FuGenesysScalerDevice *
