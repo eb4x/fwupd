@@ -7,6 +7,7 @@
 #include "config.h"
 
 #include "fu-genesys-hubhid-device.h"
+#include "fu-genesys-mstar-scaler-firmware.h"
 #include "fu-genesys-plugin.h"
 #include "fu-genesys-scaler-device.h"
 #include "fu-genesys-scaler-firmware.h"
@@ -61,6 +62,7 @@ fu_genesys_plugin_constructed(GObject *obj)
 	fu_plugin_add_device_gtype(plugin, FU_TYPE_GENESYS_SCALER_DEVICE); /* coverage */
 	fu_plugin_add_firmware_gtype(plugin, FU_TYPE_GENESYS_USBHUB_FIRMWARE);
 	fu_plugin_add_firmware_gtype(plugin, FU_TYPE_GENESYS_SCALER_FIRMWARE);
+	fu_plugin_add_firmware_gtype(plugin, FU_TYPE_GENESYS_MSTAR_SCALER_FIRMWARE);
 	fu_plugin_add_firmware_gtype(plugin, FU_TYPE_GENESYS_USBHUB_PD_FIRMWARE); /* coverage */
 	fu_plugin_add_firmware_gtype(plugin, FU_TYPE_GENESYS_USBHUB_CODESIGN_FIRMWARE); /* cov */
 	fu_plugin_add_firmware_gtype(plugin, FU_TYPE_GENESYS_USBHUB_DEV_FIRMWARE); /* coverage */
