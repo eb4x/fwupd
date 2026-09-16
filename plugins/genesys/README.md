@@ -141,6 +141,9 @@ CFI Flash Id.
 
 Since 1.8.2.
 
+The plugin does not read the flash ID from the scaler, because this requires ISP mode and blanks
+the monitor. If this quirk is missing, the scaler is enumerated, but updates are inhibited.
+
 ## Firmware Bank Quirk Use
 
 These parameters are used to configure and manage Genesys firmware banks.

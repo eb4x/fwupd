@@ -1657,6 +1657,14 @@ fu_genesys_scaler_device_setup(FuDevice *device, GError **error)
 	guint32 page_size;
 	g_autofree gchar *flash_id = NULL;
 
+	/* reading the flash ID requires ISP mode, which blanks the monitor, so use the quirk value */
+	if (self->cfi_flash_id == 0x0) {
+		fu_device_inhibit(device,
+				  "no-cfi-flash-id",
+				  "No GenesysScalerCfiFlashId quirk for this panel");
+		return TRUE;
+	}
+
 	flash_id = g_strdup_printf("%06X", self->cfi_flash_id);
 	self->cfi_device = fu_cfi_device_new(FU_DEVICE(self), flash_id);
 	if (!fu_device_setup(FU_DEVICE(self->cfi_device), error))
@@ -1687,13 +1695,30 @@ fu_genesys_scaler_device_setup(FuDevice *device, GError **error)
 	return TRUE;
 }
 
+static gboolean
+fu_genesys_scaler_device_ensure_cfi_device(FuGenesysScalerDevice *self, GError **error)
+{
+	if (self->cfi_device == NULL) {
+		g_set_error_literal(error,
+				    FWUPD_ERROR,
+				    FWUPD_ERROR_NOT_SUPPORTED,
+				    "no CFI device, missing GenesysScalerCfiFlashId quirk");
+		return FALSE;
+	}
+	return TRUE;
+}
+
 static GBytes *
 fu_genesys_scaler_device_dump_firmware(FuDevice *device, FuProgress *progress, GError **error)
 {
 	FuGenesysScalerDevice *self = FU_GENESYS_SCALER_DEVICE(device);
-	gsize size = fu_cfi_device_get_size(self->cfi_device);
+	gsize size;
 	g_autofree guint8 *buf = NULL;
 	g_autoptr(FuDeviceLocker) locker = NULL;
+
+	if (!fu_genesys_scaler_device_ensure_cfi_device(self, error))
+		return NULL;
+	size = fu_cfi_device_get_size(self->cfi_device);
 
 	/* progress */
 	fu_progress_set_id(progress, G_STRLOC);
@@ -1785,6 +1810,9 @@ fu_genesys_scaler_device_write_firmware(FuDevice *device,
 	g_autofree guint8 *buf = NULL;
 	g_autoptr(FuFirmware) payload = NULL;
 	g_autoptr(GBytes) fw_payload = NULL;
+
+	if (!fu_genesys_scaler_device_ensure_cfi_device(self, error))
+		return FALSE;
 
 	fu_progress_set_id(progress, G_STRLOC);
 	fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_ERASE, 4, NULL);
