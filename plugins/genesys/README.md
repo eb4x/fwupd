@@ -70,6 +70,13 @@ Pause R2 CPU.
 
 Since 1.7.6
 
+### `Flags=replug-on-attach`
+
+Leaving scaler ISP mode resets the scaler, and on some panels the USB hub re-enumerates too, so
+wait for both devices to come back after the update.
+
+Since 2.2.1
+
 ### `Flags=use-i2c-ch0`
 
 Use I2C ch0.
