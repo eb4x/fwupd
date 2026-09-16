@@ -1,0 +1,9 @@
+<firmware gtype="FuGenesysMstarScalerFirmware">
+  <data>aGVsbG8gd29ybGQ=</data> <!-- base64 -->
+  <build_date>20240101</build_date>
+  <firmware_id>EIM162</firmware_id>
+  <chip>MST9U</chip>
+  <panel>W270FIU01 L01WH</panel>
+  <customer>HP Z27k G3</customer>
+  <odm>WISTRON</odm>
+</firmware>

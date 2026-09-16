@@ -7,9 +7,11 @@ plugin_quirks += files('genesys.quirk', 'genesys-usbhub-fwbank.quirk')
 plugin_builtins += static_library(
   'fu_plugin_genesys',
   rustgen.process(
-    'fu-genesys-usbhub.rs' # fuzzing
+    'fu-genesys-usbhub.rs', # fuzzing
+    'fu-genesys-mstar-scaler.rs', # fuzzing
   ),
   sources: [
+    'fu-genesys-mstar-scaler-firmware.c', # fuzzing
     'fu-genesys-scaler-firmware.c', # fuzzing
     'fu-genesys-usbhub-firmware.c', # fuzzing
     'fu-genesys-usbhub-dev-firmware.c', # fuzzing
