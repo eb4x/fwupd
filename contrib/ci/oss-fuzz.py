@@ -502,6 +502,11 @@ def _build(bld: Builder) -> None:
         Fuzzer("ebitdo"),
         Fuzzer("elanfp"),
         Fuzzer("elantp"),
+        Fuzzer(
+            "genesys-mstar-scaler",
+            srcdir="genesys",
+            pattern="genesys-mstar-scaler-firmware",
+        ),
         Fuzzer("genesys-scaler", srcdir="genesys", pattern="genesys-scaler-firmware"),
         Fuzzer("genesys-usbhub", srcdir="genesys", pattern="genesys-usbhub-firmware"),
         Fuzzer("hughski-colorhug", pattern="hughski-colorhug-device"),
