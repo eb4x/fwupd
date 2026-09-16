@@ -1494,20 +1494,18 @@ fu_genesys_scaler_device_get_ddcci_data(FuGenesysScalerDevice *self,
 	return TRUE;
 }
 
+/* query one "get info" index over DDC/CI and return the offset of the reply data in @buf */
 static gboolean
-fu_genesys_scaler_device_get_firmware_packet_version(FuGenesysScalerDevice *self,
-						     FuGenesysScalerFirmwarePacketVersion *ver,
-						     GError **error)
+fu_genesys_scaler_device_get_ddcci_info(FuGenesysScalerDevice *self,
+					guint8 cmd,
+					guint8 *buf,
+					guint bufsz,
+					gsize *offset,
+					GError **error)
 {
-	guint8 buf[0x40] = {0};
-	guint8 offset = 4;
+	*offset = 4;
 
-	if (!fu_genesys_scaler_device_get_ddcci_data(
-		self,
-		GENESYS_SCALER_CMD_DDCCI_FIRMWARE_PACKET_VERSION,
-		buf,
-		sizeof(buf),
-		error))
+	if (!fu_genesys_scaler_device_get_ddcci_data(self, cmd, buf, bufsz, error))
 		return FALSE;
 
 	if (buf[0] == 0x6f && buf[1] == 0x6e) {
@@ -1515,20 +1513,20 @@ fu_genesys_scaler_device_get_firmware_packet_version(FuGenesysScalerDevice *self
 		guint8 checksum = 0;
 		guint8 checksum_tmp = 0x0;
 
-		if (len > sizeof(buf) - 3) {
+		if (len + 3 > bufsz) {
 			g_set_error(error,
 				    FWUPD_ERROR,
 				    FWUPD_ERROR_INTERNAL,
-				    "error dddci length too large, got 0x%x, expected <= 0x%zx",
+				    "error ddcci length too large, got 0x%x, expected <= 0x%x",
 				    (guint)len,
-				    sizeof(buf));
+				    bufsz - 3);
 			return FALSE;
 		}
 
 		buf[0] = 0x50; /* drifted value */
-		if (!fu_xor8_safe(buf, sizeof(buf), 0x0, len + 3, &checksum, error))
+		if (!fu_xor8_safe(buf, bufsz, 0x0, len + 3, &checksum, error))
 			return FALSE;
-		if (!fu_memread_uint8_safe(buf, sizeof(buf), len + 3, &checksum_tmp, error))
+		if (!fu_memread_uint8_safe(buf, bufsz, len + 3, &checksum_tmp, error))
 			return FALSE;
 		if (checksum_tmp != checksum) {
 			g_set_error(error,
@@ -1540,8 +1538,29 @@ fu_genesys_scaler_device_get_firmware_packet_version(FuGenesysScalerDevice *self
 			return FALSE;
 		}
 
-		offset = 7;
+		*offset = 7;
 	}
+
+	/* success */
+	return TRUE;
+}
+
+static gboolean
+fu_genesys_scaler_device_get_firmware_packet_version(FuGenesysScalerDevice *self,
+						     FuGenesysScalerFirmwarePacketVersion *ver,
+						     GError **error)
+{
+	guint8 buf[0x40] = {0};
+	gsize offset = 0;
+
+	if (!fu_genesys_scaler_device_get_ddcci_info(
+		self,
+		GENESYS_SCALER_CMD_DDCCI_FIRMWARE_PACKET_VERSION,
+		buf,
+		sizeof(buf),
+		&offset,
+		error))
+		return FALSE;
 
 	ver->stage = buf[offset];
 	ver->model = buf[offset + 1];
