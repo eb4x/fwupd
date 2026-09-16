@@ -1470,7 +1470,7 @@ fu_genesys_scaler_device_get_ddcci_data(FuGenesysScalerDevice *self,
 		return FALSE;
 	}
 
-	fu_device_sleep(FU_DEVICE(self), 100); /* 1ms */
+	fu_device_sleep(FU_DEVICE(self), 100); /* ms */
 
 	if (!fu_usb_device_control_transfer(FU_USB_DEVICE(proxy),
 					    FU_USB_DIRECTION_DEVICE_TO_HOST,
