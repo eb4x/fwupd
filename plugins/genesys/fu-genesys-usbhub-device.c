@@ -682,10 +682,21 @@ fu_genesys_usbhub_device_authenticate(FuGenesysUsbhubDevice *self, GError **erro
 	high_byte = (release & 0xff00) >> 8;
 	temp_byte = low_byte ^ high_byte;
 
-	offset_start = g_random_int_range(GENESYS_USBHUB_ENCRYPT_REGION_START, /* nocheck:blocked */
-					  GENESYS_USBHUB_ENCRYPT_REGION_END - 1);
-	offset_end = g_random_int_range(offset_start + 1, /* nocheck:blocked */
-					GENESYS_USBHUB_ENCRYPT_REGION_END);
+	/* the window is normally random, but recording and replay must send the same request;
+	 * the context flag applies to the whole process, so every hub uses the fixed window while
+	 * recording */
+	if (fu_device_has_flag(FU_DEVICE(self), FWUPD_DEVICE_FLAG_EMULATED) ||
+	    fu_context_has_flag(fu_device_get_context(FU_DEVICE(self)),
+				FU_CONTEXT_FLAG_SAVE_EVENTS)) {
+		offset_start = GENESYS_USBHUB_ENCRYPT_REGION_START;
+		offset_end = GENESYS_USBHUB_ENCRYPT_REGION_END - 1;
+	} else {
+		offset_start =
+		    g_random_int_range(GENESYS_USBHUB_ENCRYPT_REGION_START, /* nocheck:blocked */
+				       GENESYS_USBHUB_ENCRYPT_REGION_END - 1);
+		offset_end = g_random_int_range(offset_start + 1, /* nocheck:blocked */
+						GENESYS_USBHUB_ENCRYPT_REGION_END);
+	}
 	if (!fu_xor8_safe(self->st_fwinfo_ts->buf->data,
 			  self->st_fwinfo_ts->buf->len,
 			  offset_start,
