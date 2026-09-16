@@ -139,6 +139,9 @@ CFI Flash Id.
 * HP M24fd USB-C Monitor: `0xC22016`
 * HP M27fd USB-C Monitor: `0xC84016`
 
+The plugin does not read the flash ID from the scaler, because this requires ISP mode and blanks
+the monitor. If this quirk is missing, the scaler is enumerated, but updates are inhibited.
+
 Since 1.8.2.
 
 ## Firmware Bank Quirk Use
