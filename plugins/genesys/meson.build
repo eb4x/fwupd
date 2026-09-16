@@ -34,4 +34,7 @@ device_tests += files(
   #  'tests/genesys-evb-failure.json', # cannot emulate two devices(usb hub + child hid).
   'tests/genesys-servo-dock.json',
   'tests/genesys-zdn-chromebook.json',
+  'tests/hp-z27k-g3.json',
 )
+
+enumeration_data += files('tests/hp-z27k-g3-setup.json')

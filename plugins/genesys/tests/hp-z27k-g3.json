@@ -1,0 +1,18 @@
+{
+  "name": "HP Z27k G3",
+  "interactive": false,
+  "steps": [
+    {
+      "emulation-file": "@enumeration_datadir@/hp-z27k-g3-setup.json",
+      "components": [
+        {
+          "name": "MStar TSUM_G scaler",
+          "version": "EIM121",
+          "guids": [
+            "5bc33592-5692-549d-93d0-107662b5fde3"
+          ]
+        }
+      ]
+    }
+  ]
+}
