@@ -7,6 +7,7 @@
 #include "config.h"
 
 #include "fu-genesys-common.h"
+#include "fu-genesys-mstar-scaler-firmware.h"
 #include "fu-genesys-scaler-device.h"
 #include "fu-genesys-scaler-firmware.h"
 #include "fu-genesys-usbhub-device.h"
@@ -24,6 +25,7 @@
 #define GENESYS_SCALER_MSTAR_DATA_IN  0x7f
 
 #define GENESYS_SCALER_CMD_DDCCI_FIRMWARE_PACKET_VERSION 0x06
+#define GENESYS_SCALER_PANEL_TYPE_LEN			 4
 
 #define GENESYS_SCALER_CMD_DATA_WRITE 0x10
 #define GENESYS_SCALER_CMD_DATA_READ  0x11
@@ -52,6 +54,7 @@ typedef struct {
 struct _FuGenesysScalerDevice {
 	FuDevice parent_instance;
 	guint8 level;
+	gboolean has_public_key;
 	FuGenesysPublicKey public_key;
 	guint32 cfi_flash_id;
 	FuCfiDevice *cfi_device;
@@ -1599,8 +1602,21 @@ fu_genesys_scaler_device_probe(FuDevice *device, GError **error)
 						     sizeof(self->public_key),
 						     error))
 		return FALSE;
-	if (memcmp(self->public_key.N, "N = ", 4) != 0 ||
-	    memcmp(self->public_key.E, "E = ", 4) != 0) {
+	if (memcmp(self->public_key.N, "N = ", 4) == 0 &&
+	    memcmp(self->public_key.E, "E = ", 4) == 0) {
+		self->has_public_key = TRUE;
+		guid = fwupd_guid_hash_data((const guint8 *)&self->public_key,
+					    sizeof(self->public_key),
+					    FWUPD_GUID_FLAG_NONE);
+	} else if (self->level == 1) {
+		/* level 1 parts have no key at all, so the read returns unrelated data */
+		self->has_public_key = FALSE;
+		g_info("level 1 scaler has no public-key, matching on panel type");
+		fu_device_set_firmware_gtype(device, FU_TYPE_GENESYS_MSTAR_SCALER_FIRMWARE);
+		/* a level 1 firmware file is only as large as the image it contains, so it is
+		 * usually smaller than a full image slot */
+		fu_device_set_firmware_size_min(device, 0);
+	} else {
 		fu_dump_raw(G_LOG_DOMAIN,
 			    "PublicKey",
 			    (const guint8 *)&self->public_key,
@@ -1611,9 +1627,6 @@ fu_genesys_scaler_device_probe(FuDevice *device, GError **error)
 				    "invalid public-key");
 		return FALSE;
 	}
-	guid = fwupd_guid_hash_data((const guint8 *)&self->public_key,
-				    sizeof(self->public_key),
-				    FWUPD_GUID_FLAG_NONE);
 
 	if (!fu_genesys_scaler_device_get_version(self, buf, sizeof(buf), error))
 		return FALSE;
@@ -1631,18 +1644,55 @@ fu_genesys_scaler_device_probe(FuDevice *device, GError **error)
 
 	/* add instance ID */
 	fu_device_add_instance_str(device, "MSTAR", "TSUM_G");
-	fu_device_add_instance_strup(device, "PUBKEY", guid);
 	fu_device_add_instance_strup(device, "PANELREV", panelrev);
-	if (!fu_device_build_instance_id(device, error, "GENESYS_SCALER", "MSTAR", "PUBKEY", NULL))
-		return FALSE;
-	if (!fu_device_build_instance_id(device,
-					 error,
-					 "GENESYS_SCALER",
-					 "MSTAR",
-					 "PUBKEY",
-					 "PANELREV",
-					 NULL))
-		return FALSE;
+	if (self->has_public_key) {
+		fu_device_add_instance_strup(device, "PUBKEY", guid);
+		if (!fu_device_build_instance_id(device,
+						 error,
+						 "GENESYS_SCALER",
+						 "MSTAR",
+						 "PUBKEY",
+						 NULL))
+			return FALSE;
+		if (!fu_device_build_instance_id(device,
+						 error,
+						 "GENESYS_SCALER",
+						 "MSTAR",
+						 "PUBKEY",
+						 "PANELREV",
+						 NULL))
+			return FALSE;
+	} else {
+		/* the full ID changes with each release, e.g. EIM121 then EIM162, so match on
+		 * the panel type, i.e. the ID without the two release digits, which is what the
+		 * vendor tool uses to select the image */
+		g_autofree gchar *paneltype = g_strndup(panelrev, GENESYS_SCALER_PANEL_TYPE_LEN);
+		FuDevice *proxy = fu_device_get_proxy(device, error);
+		if (proxy == NULL)
+			return FALSE;
+		/* limit the match to one product with the hub IDs, as the public key does for level 0 */
+		fu_device_add_instance_u16(device, "VID", fu_device_get_vid(proxy));
+		fu_device_add_instance_u16(device, "PID", fu_device_get_pid(proxy));
+		fu_device_add_instance_strup(device, "PANELTYPE", paneltype);
+		if (!fu_device_build_instance_id(device,
+						 error,
+						 "GENESYS_SCALER",
+						 "VID",
+						 "PID",
+						 "MSTAR",
+						 "PANELTYPE",
+						 NULL))
+			return FALSE;
+		fu_device_build_instance_id_full(device,
+						 FU_DEVICE_INSTANCE_FLAG_QUIRKS,
+						 NULL,
+						 "GENESYS_SCALER",
+						 "VID",
+						 "PID",
+						 "MSTAR",
+						 "PANELREV",
+						 NULL);
+	}
 
 	fu_device_add_flag(device, FWUPD_DEVICE_FLAG_UPDATABLE);
 
@@ -1763,6 +1813,19 @@ fu_genesys_scaler_device_dump_firmware(FuDevice *device, FuProgress *progress, G
 	return g_bytes_new_take(g_steal_pointer(&buf), size);
 }
 
+/* a level 0 image is payload + public-key, so only the payload is programmed; a level 1 image
+ * is programmed whole, from sBoot to the updater trailer, as the boot loader reads its checksum
+ * from just past the payload */
+static GBytes *
+fu_genesys_scaler_device_get_payload(FuGenesysScalerDevice *self,
+				     FuFirmware *firmware,
+				     GError **error)
+{
+	if (self->has_public_key)
+		return fu_firmware_get_image_by_id_bytes(firmware, FU_FIRMWARE_ID_PAYLOAD, error);
+	return fu_firmware_get_bytes(firmware, error);
+}
+
 static gboolean
 fu_genesys_scaler_device_check_firmware(FuDevice *device,
 					FuFirmware *firmware,
@@ -1771,30 +1834,48 @@ fu_genesys_scaler_device_check_firmware(FuDevice *device,
 {
 	FuGenesysScalerDevice *self = FU_GENESYS_SCALER_DEVICE(device);
 	g_autoptr(GBytes) blob_payload = NULL;
-	g_autoptr(GBytes) blob_public_key = NULL;
 
 	/* check public-key */
-	blob_public_key =
-	    fu_firmware_get_image_by_id_bytes(firmware, FU_FIRMWARE_ID_SIGNATURE, error);
-	if (blob_public_key == NULL)
-		return FALSE;
-	fu_dump_raw(G_LOG_DOMAIN,
-		    "PublicKey",
-		    g_bytes_get_data(blob_public_key, NULL),
-		    g_bytes_get_size(blob_public_key));
-	if (memcmp(g_bytes_get_data(blob_public_key, NULL),
-		   &self->public_key,
-		   sizeof(self->public_key)) != 0 &&
-	    (flags & FWUPD_INSTALL_FLAG_FORCE) == 0) {
-		g_set_error_literal(error,
+	if (self->has_public_key) {
+		g_autoptr(GBytes) blob_public_key = NULL;
+		blob_public_key =
+		    fu_firmware_get_image_by_id_bytes(firmware, FU_FIRMWARE_ID_SIGNATURE, error);
+		if (blob_public_key == NULL)
+			return FALSE;
+		fu_dump_raw(G_LOG_DOMAIN,
+			    "PublicKey",
+			    g_bytes_get_data(blob_public_key, NULL),
+			    g_bytes_get_size(blob_public_key));
+		if (memcmp(g_bytes_get_data(blob_public_key, NULL),
+			   &self->public_key,
+			   sizeof(self->public_key)) != 0 &&
+		    (flags & FWUPD_INSTALL_FLAG_FORCE) == 0) {
+			g_set_error_literal(error,
+					    FWUPD_ERROR,
+					    FWUPD_ERROR_SIGNATURE_INVALID,
+					    "mismatch public-key");
+			return FALSE;
+		}
+	}
+
+	/* the plugin writes the update to image B, so the image B offset in the file must be the
+	 * same as the offset that the plugin uses */
+	if (FU_IS_GENESYS_MSTAR_SCALER_FIRMWARE(firmware)) {
+		guint32 dual_image_offset = fu_genesys_mstar_scaler_firmware_get_dual_image_offset(
+		    FU_GENESYS_MSTAR_SCALER_FIRMWARE(firmware));
+		if (dual_image_offset != GENESYS_SCALER_BANK_SIZE) {
+			g_set_error(error,
 				    FWUPD_ERROR,
-				    FWUPD_ERROR_SIGNATURE_INVALID,
-				    "mismatch public-key");
-		return FALSE;
+				    FWUPD_ERROR_INVALID_FILE,
+				    "wrong dual-image offset, got 0x%x, expected 0x%x",
+				    dual_image_offset,
+				    (guint)GENESYS_SCALER_BANK_SIZE);
+			return FALSE;
+		}
 	}
 
 	/* check size */
-	blob_payload = fu_firmware_get_image_by_id_bytes(firmware, FU_FIRMWARE_ID_PAYLOAD, error);
+	blob_payload = fu_genesys_scaler_device_get_payload(self, firmware, error);
 	if (blob_payload == NULL)
 		return FALSE;
 	if (g_bytes_get_size(blob_payload) > fu_device_get_firmware_size_max(device)) {
@@ -1823,7 +1904,6 @@ fu_genesys_scaler_device_write_firmware(FuDevice *device,
 	gsize size;
 	const guint8 *data;
 	g_autofree guint8 *buf = NULL;
-	g_autoptr(FuFirmware) payload = NULL;
 	g_autoptr(GBytes) fw_payload = NULL;
 
 	if (!fu_genesys_scaler_device_ensure_cfi_device(self, error))
@@ -1837,10 +1917,7 @@ fu_genesys_scaler_device_write_firmware(FuDevice *device,
 	if (fu_device_has_flag(device, FWUPD_DEVICE_FLAG_DUAL_IMAGE))
 		addr = GENESYS_SCALER_BANK_SIZE;
 
-	payload = fu_firmware_get_image_by_id(firmware, FU_FIRMWARE_ID_PAYLOAD, error);
-	if (payload == NULL)
-		return FALSE;
-	fw_payload = fu_firmware_get_bytes(payload, error);
+	fw_payload = fu_genesys_scaler_device_get_payload(self, firmware, error);
 	if (fw_payload == NULL)
 		return FALSE;
 	data = g_bytes_get_data(fw_payload, &size);
@@ -1901,29 +1978,33 @@ fu_genesys_scaler_device_to_string(FuDevice *device, guint idt, GString *str)
 	g_autoptr(GError) error_local_n = NULL;
 
 	fwupd_codec_string_append_hex(str, idt, "Level", self->level);
-	if (fu_memcpy_safe((guint8 *)public_key_e,
-			   sizeof(public_key_e),
-			   0, /* dst */
-			   (const guint8 *)&self->public_key,
-			   sizeof(self->public_key),
-			   sizeof(self->public_key) - 2 - (sizeof(public_key_e) - 1), /* src */
-			   sizeof(public_key_e) - 1,
-			   &error_local_e)) {
-		fwupd_codec_string_append(str, idt, "PublicKeyE", public_key_e);
-	} else {
-		g_debug("ignoring public-key parameter E: %s", error_local_e->message);
-	}
-	if (fu_memcpy_safe((guint8 *)public_key_n,
-			   sizeof(public_key_n),
-			   0, /* dst */
-			   (const guint8 *)&self->public_key,
-			   sizeof(self->public_key),
-			   4, /* src */
-			   sizeof(public_key_n) - 1,
-			   &error_local_n)) {
-		fwupd_codec_string_append(str, idt, "PublicKeyN", public_key_n);
-	} else {
-		g_debug("ignoring public-key parameter N: %s", error_local_n->message);
+	fwupd_codec_string_append_bool(str, idt, "HasPublicKey", self->has_public_key);
+	if (self->has_public_key) {
+		if (fu_memcpy_safe((guint8 *)public_key_e,
+				   sizeof(public_key_e),
+				   0, /* dst */
+				   (const guint8 *)&self->public_key,
+				   sizeof(self->public_key),
+				   sizeof(self->public_key) - 2 -
+				       (sizeof(public_key_e) - 1), /* src */
+				   sizeof(public_key_e) - 1,
+				   &error_local_e)) {
+			fwupd_codec_string_append(str, idt, "PublicKeyE", public_key_e);
+		} else {
+			g_debug("ignoring public-key parameter E: %s", error_local_e->message);
+		}
+		if (fu_memcpy_safe((guint8 *)public_key_n,
+				   sizeof(public_key_n),
+				   0, /* dst */
+				   (const guint8 *)&self->public_key,
+				   sizeof(self->public_key),
+				   4, /* src */
+				   sizeof(public_key_n) - 1,
+				   &error_local_n)) {
+			fwupd_codec_string_append(str, idt, "PublicKeyN", public_key_n);
+		} else {
+			g_debug("ignoring public-key parameter N: %s", error_local_n->message);
+		}
 	}
 	fwupd_codec_string_append_hex(str, idt, "ReadRequestRead", self->vc.req_read);
 	fwupd_codec_string_append_hex(str, idt, "WriteRequest", self->vc.req_write);
