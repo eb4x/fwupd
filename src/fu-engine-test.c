@@ -12,6 +12,7 @@
 #include "fu-config-private.h"
 #include "fu-context-private.h"
 #include "fu-device-private.h"
+#include "fu-engine-emulator.h"
 #include "fu-engine-requirements.h"
 #include "fu-engine.h"
 #include "fu-history.h"
@@ -539,6 +540,160 @@ fu_engine_device_equivalent_func(void)
 	g_assert_nonnull(device_worst);
 	g_assert_false(fu_device_has_flag(device_worst, FWUPD_DEVICE_FLAG_UPDATABLE));
 	g_assert_true(fu_device_has_problem(device_worst, FWUPD_DEVICE_PROBLEM_LOWER_PRIORITY));
+}
+
+static FuFirmware *
+fu_engine_emulation_archive_from_ostream(GOutputStream *ostream)
+{
+	gboolean ret;
+	g_autoptr(FuFirmware) archive = fu_zip_firmware_new();
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GError) error = NULL;
+
+	ret = g_output_stream_close(ostream, NULL, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	blob = g_memory_output_stream_steal_as_bytes(G_MEMORY_OUTPUT_STREAM(ostream));
+	ret = fu_firmware_parse_bytes(archive, blob, 0x0, FU_FIRMWARE_PARSE_FLAG_NONE, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	return g_steal_pointer(&archive);
+}
+
+static gchar *
+fu_engine_emulation_archive_get_json(FuFirmware *archive, const gchar *fn)
+{
+	g_autoptr(GBytes) blob = NULL;
+	g_autoptr(GError) error = NULL;
+
+	blob = fu_firmware_get_image_by_id_bytes(archive, fn, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(blob);
+	return g_strndup(g_bytes_get_data(blob, NULL), g_bytes_get_size(blob));
+}
+
+/* each tagged device saves the phase as it is added, so check that recording the second device
+ * does not drop the events already recorded for the first */
+static void
+fu_engine_emulation_repeat_save_func(void)
+{
+	gboolean ret;
+	g_autofree gchar *json = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
+	g_autoptr(FuDevice) device1 = fu_device_new(ctx);
+	g_autoptr(FuDevice) device2 = fu_device_new(ctx);
+	g_autoptr(FuDeviceEvent) event1 = fu_device_event_new("Event:Device1");
+	g_autoptr(FuDeviceEvent) event2 = fu_device_event_new("Event:Device2");
+	g_autoptr(FuEngine) engine = fu_engine_new(ctx);
+	g_autoptr(FuFirmware) archive = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GOutputStream) ostream = g_memory_output_stream_new_resizable();
+
+	/* load engine to get FuConfig set up; this also clears SAVE_EVENTS, as no device in the
+	 * history has an emulation tag, so the flag is set afterwards */
+	ret = fu_engine_load(engine, FU_ENGINE_LOAD_FLAG_NO_CACHE, progress, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	fu_context_add_flag(ctx, FU_CONTEXT_FLAG_SAVE_EVENTS);
+
+	/* each device records an event and saves the setup phase as it is added */
+	fu_device_set_id(device1, "99249eb1bd9ef0b6e192b271a8cb6a3090cfec7a");
+	fu_device_set_name(device1, "device1");
+	fu_device_add_flag(device1, FWUPD_DEVICE_FLAG_EMULATION_TAG);
+	fu_device_add_event(device1, event1);
+	fu_engine_add_device(engine, device1);
+	fu_device_set_id(device2, "1a8d0d9a96ad3e67ba76cf3033623625dc6d6882");
+	fu_device_set_name(device2, "device2");
+	fu_device_add_flag(device2, FWUPD_DEVICE_FLAG_EMULATION_TAG);
+	fu_device_add_event(device2, event2);
+	fu_engine_add_device(engine, device2);
+
+	/* both devices have to still be in the saved phase */
+	ret = fu_engine_emulation_save(engine, ostream, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	archive = fu_engine_emulation_archive_from_ostream(ostream);
+	json = fu_engine_emulation_archive_get_json(archive, "setup.json");
+	g_assert_nonnull(g_strstr_len(json, -1, "Event:Device1"));
+	g_assert_nonnull(g_strstr_len(json, -1, "Event:Device2"));
+}
+
+/* events recorded after a phase is saved, e.g. when the device replugs after detach, belong to
+ * the next phase, and only the events already saved are dropped */
+static void
+fu_engine_emulation_phase_carry_func(void)
+{
+	gboolean ret;
+	g_autofree gchar *json_detach = NULL;
+	g_autofree gchar *json_install = NULL;
+	g_autofree gchar *json_setup = NULL;
+	g_autoptr(FuContext) ctx = fu_context_new_full(FU_CONTEXT_FLAG_NO_QUIRKS);
+	g_autoptr(FuDevice) device = fu_device_new(ctx);
+	g_autoptr(FuDeviceEvent) event_setup = fu_device_event_new("Event:Setup");
+	g_autoptr(FuDeviceEvent) event_detach = fu_device_event_new("Event:Detach");
+	g_autoptr(FuDeviceEvent) event_replug = fu_device_event_new("Event:Replug");
+	g_autoptr(FuEngine) engine = fu_engine_new(ctx);
+	g_autoptr(FuEngineEmulator) emulator = NULL;
+	g_autoptr(FuFirmware) archive = NULL;
+	g_autoptr(FuProgress) progress = fu_progress_new(G_STRLOC);
+	g_autoptr(GError) error = NULL;
+	g_autoptr(GOutputStream) ostream = g_memory_output_stream_new_resizable();
+
+	/* load engine to get FuConfig set up */
+	ret = fu_engine_load(engine, FU_ENGINE_LOAD_FLAG_NO_CACHE, progress, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	emulator = fu_engine_emulator_new(engine);
+
+	fu_device_set_id(device, "99249eb1bd9ef0b6e192b271a8cb6a3090cfec7a");
+	fu_device_set_name(device, "device");
+	fu_device_add_flag(device, FWUPD_DEVICE_FLAG_EMULATION_TAG);
+	fu_engine_add_device(engine, device);
+
+	/* saving the same phase twice keeps the events */
+	fu_device_add_event(device, event_setup);
+	for (guint i = 0; i < 2; i++) {
+		ret = fu_engine_emulator_save_phase(emulator,
+						    0,
+						    FU_ENGINE_EMULATOR_PHASE_SETUP,
+						    FU_ENGINE_EMULATOR_WRITE_COUNT_DEFAULT,
+						    &error);
+		g_assert_no_error(error);
+		g_assert_true(ret);
+	}
+
+	/* detach, then the device replugs before the install phase is saved */
+	fu_device_add_event(device, event_detach);
+	ret = fu_engine_emulator_save_phase(emulator,
+					    0,
+					    FU_ENGINE_EMULATOR_PHASE_DETACH,
+					    FU_ENGINE_EMULATOR_WRITE_COUNT_DEFAULT,
+					    &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	fu_device_add_event(device, event_replug);
+	ret = fu_engine_emulator_save_phase(emulator,
+					    0,
+					    FU_ENGINE_EMULATOR_PHASE_INSTALL,
+					    FU_ENGINE_EMULATOR_WRITE_COUNT_DEFAULT,
+					    &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+
+	ret = fu_engine_emulator_save(emulator, ostream, &error);
+	g_assert_no_error(error);
+	g_assert_true(ret);
+	archive = fu_engine_emulation_archive_from_ostream(ostream);
+	json_setup = fu_engine_emulation_archive_get_json(archive, "setup.json");
+	g_assert_nonnull(g_strstr_len(json_setup, -1, "Event:Setup"));
+	json_detach = fu_engine_emulation_archive_get_json(archive, "detach.json");
+	g_assert_null(g_strstr_len(json_detach, -1, "Event:Setup"));
+	g_assert_nonnull(g_strstr_len(json_detach, -1, "Event:Detach"));
+	json_install = fu_engine_emulation_archive_get_json(archive, "install.json");
+	g_assert_null(g_strstr_len(json_install, -1, "Event:Setup"));
+	g_assert_null(g_strstr_len(json_install, -1, "Event:Detach"));
+	g_assert_nonnull(g_strstr_len(json_install, -1, "Event:Replug"));
 }
 
 static void
@@ -3652,6 +3807,10 @@ main(int argc, char **argv)
 	g_test_add_func("/fwupd/engine/release-dedupe", fu_engine_release_dedupe_func);
 	g_test_add_func("/fwupd/engine/generate-md", fu_engine_generate_md_func);
 	g_test_add_func("/fwupd/engine/better-than", fu_engine_device_better_than_func);
+	g_test_add_func("/fwupd/engine/emulation{repeat-save}",
+			fu_engine_emulation_repeat_save_func);
+	g_test_add_func("/fwupd/engine/emulation{phase-carry}",
+			fu_engine_emulation_phase_carry_func);
 	g_test_add_func("/fwupd/engine/plugin/mutable", fu_engine_test_plugin_mutable_enumeration);
 	g_test_add_func("/fwupd/engine/plugin/composite", fu_engine_plugin_composite_func);
 	g_test_add_func("/fwupd/engine/plugin/composite-multistep",

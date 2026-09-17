@@ -17,7 +17,9 @@
 struct _FuEngineEmulator {
 	GObject parent_instance;
 	FuEngine *engine;
-	GHashTable *phase_blobs; /* (element-type utf-8 GBytes) */
+	GHashTable *phase_blobs;  /* (element-type utf-8 GBytes) */
+	gchar *saved_fn;	  /* (nullable) */
+	GHashTable *saved_events; /* (element-type FuDeviceEvent) */
 };
 
 G_DEFINE_TYPE(FuEngineEmulator, fu_engine_emulator, G_TYPE_OBJECT)
@@ -174,14 +176,49 @@ fu_engine_emulator_to_json(FuEngineEmulator *self, GPtrArray *devices, FwupdJson
 		fwupd_json_array_add_object(json_arr, json_device);
 	}
 	fwupd_json_object_add_array(json_obj, "UsbDevices", json_arr);
+}
 
-	/* we've recorded these, now drop them */
+/* the events of the last saved phase are only dropped when a different phase is saved, as the
+ * same phase is saved again as each device is enumerated, and a device can record events between
+ * the save and the start of the next phase, e.g. when replugging after detach */
+static void
+fu_engine_emulator_drop_saved_events(FuEngineEmulator *self, GPtrArray *devices, const gchar *fn)
+{
+	if (self->saved_fn == NULL || g_strcmp0(self->saved_fn, fn) == 0)
+		return;
 	for (guint i = 0; i < devices->len; i++) {
 		FuDevice *device = g_ptr_array_index(devices, i);
+		GPtrArray *events;
+
 		if (!fu_device_has_flag(device, FWUPD_DEVICE_FLAG_EMULATION_TAG))
 			continue;
-		fu_device_clear_events(device);
+		events = fu_device_get_events(device);
+		for (guint j = events->len; j > 0; j--) {
+			if (g_hash_table_contains(self->saved_events,
+						  g_ptr_array_index(events, j - 1)))
+				g_ptr_array_remove_index(events, j - 1);
+		}
 	}
+	g_hash_table_remove_all(self->saved_events);
+}
+
+static void
+fu_engine_emulator_mark_saved_events(FuEngineEmulator *self, GPtrArray *devices, const gchar *fn)
+{
+	for (guint i = 0; i < devices->len; i++) {
+		FuDevice *device = g_ptr_array_index(devices, i);
+		GPtrArray *events;
+
+		if (!fu_device_has_flag(device, FWUPD_DEVICE_FLAG_EMULATION_TAG))
+			continue;
+		events = fu_device_get_events(device);
+		for (guint j = 0; j < events->len; j++) {
+			FuDeviceEvent *event = g_ptr_array_index(events, j);
+			g_hash_table_add(self->saved_events, g_object_ref(event));
+		}
+	}
+	g_free(self->saved_fn);
+	self->saved_fn = g_strdup(fn);
 }
 
 gboolean
@@ -202,9 +239,10 @@ fu_engine_emulator_save_phase(FuEngineEmulator *self,
 	devices = fu_engine_get_devices(self->engine, error);
 	if (devices == NULL)
 		return FALSE;
+	fn = fu_engine_emulator_phase_to_filename(composite_cnt, phase, write_cnt);
+	fu_engine_emulator_drop_saved_events(self, devices, fn);
 	fu_engine_emulator_to_json(self, devices, json_obj);
 
-	fn = fu_engine_emulator_phase_to_filename(composite_cnt, phase, write_cnt);
 	g_debug("saving %s", fn);
 	blob_old = g_hash_table_lookup(self->phase_blobs, fn);
 	blob_new = fwupd_json_object_to_bytes(json_obj,
@@ -221,6 +259,7 @@ fu_engine_emulator_save_phase(FuEngineEmulator *self,
 		g_info("JSON unchanged for phase %s [%u]",
 		       fu_engine_emulator_phase_to_string(phase),
 		       write_cnt);
+		fu_engine_emulator_mark_saved_events(self, devices, fn);
 		return TRUE;
 	}
 	blob_new_safe = fu_strsafe_bytes(blob_new, 8000);
@@ -229,6 +268,7 @@ fu_engine_emulator_save_phase(FuEngineEmulator *self,
 	       fu_engine_emulator_phase_to_string(phase),
 	       write_cnt,
 	       blob_new_safe);
+	fu_engine_emulator_mark_saved_events(self, devices, fn);
 	g_hash_table_insert(self->phase_blobs, g_steal_pointer(&fn), g_steal_pointer(&blob_new));
 
 	/* success */
@@ -367,6 +407,8 @@ fu_engine_emulator_init(FuEngineEmulator *self)
 {
 	self->phase_blobs =
 	    g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_bytes_unref);
+	self->saved_events =
+	    g_hash_table_new_full(g_direct_hash, g_direct_equal, g_object_unref, NULL);
 }
 
 static void
@@ -374,6 +416,8 @@ fu_engine_emulator_finalize(GObject *obj)
 {
 	FuEngineEmulator *self = FU_ENGINE_EMULATOR(obj);
 	g_hash_table_unref(self->phase_blobs);
+	g_hash_table_unref(self->saved_events);
+	g_free(self->saved_fn);
 	G_OBJECT_CLASS(fu_engine_emulator_parent_class)->finalize(obj);
 }
 
