@@ -1795,6 +1795,44 @@ fu_genesys_scaler_device_setup(FuDevice *device, GError **error)
 	return TRUE;
 }
 
+static GBytes *
+fu_genesys_scaler_device_read_region(FuGenesysScalerDevice *self,
+				     guint32 addr,
+				     gsize size,
+				     FuProgress *progress,
+				     GError **error)
+{
+	g_autofree guint8 *buf = NULL;
+	g_autoptr(FuDeviceLocker) locker = NULL;
+
+	/* progress */
+	fu_progress_set_id(progress, G_STRLOC);
+	fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_BUSY, 1, "detach");
+	fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_READ, 99, NULL);
+
+	/* require detach -> attach */
+	locker = fu_device_locker_new_full(FU_DEVICE(self),
+					   (FuDeviceLockerFunc)fu_device_detach,
+					   (FuDeviceLockerFunc)fu_device_attach,
+					   error);
+	if (locker == NULL)
+		return NULL;
+	fu_progress_step_done(progress);
+
+	buf = g_malloc0(size);
+	if (!fu_genesys_scaler_device_read_flash(self,
+						 addr,
+						 buf,
+						 size,
+						 fu_progress_get_child(progress),
+						 error))
+		return NULL;
+	fu_progress_step_done(progress);
+
+	/* success */
+	return g_bytes_new_take(g_steal_pointer(&buf), size);
+}
+
 static gboolean
 fu_genesys_scaler_device_ensure_cfi_device(FuGenesysScalerDevice *self, GError **error)
 {
@@ -1812,40 +1850,46 @@ static GBytes *
 fu_genesys_scaler_device_dump_firmware(FuDevice *device, FuProgress *progress, GError **error)
 {
 	FuGenesysScalerDevice *self = FU_GENESYS_SCALER_DEVICE(device);
-	gsize size;
-	g_autofree guint8 *buf = NULL;
-	g_autoptr(FuDeviceLocker) locker = NULL;
 
 	if (!fu_genesys_scaler_device_ensure_cfi_device(self, error))
 		return NULL;
-	size = fu_cfi_device_get_size(self->cfi_device);
+	return fu_genesys_scaler_device_read_region(self,
+						    0x0,
+						    fu_cfi_device_get_size(self->cfi_device),
+						    progress,
+						    error);
+}
 
-	/* progress */
-	fu_progress_set_id(progress, G_STRLOC);
-	fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_BUSY, 1, "detach");
-	fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_READ, 99, NULL);
+static FuFirmware *
+fu_genesys_scaler_device_read_firmware(FuDevice *device, FuProgress *progress, GError **error)
+{
+	FuGenesysScalerDevice *self = FU_GENESYS_SCALER_DEVICE(device);
+	g_autoptr(FuFirmware) firmware = NULL;
+	g_autoptr(GBytes) blob = NULL;
 
-	/* require detach -> attach */
-	locker = fu_device_locker_new_full(device,
-					   (FuDeviceLockerFunc)fu_device_detach,
-					   (FuDeviceLockerFunc)fu_device_attach,
-					   error);
-	if (locker == NULL)
+	if (!fu_genesys_scaler_device_ensure_cfi_device(self, error))
 		return NULL;
-	fu_progress_step_done(progress);
 
-	buf = g_malloc0(size);
-	if (!fu_genesys_scaler_device_read_flash(self,
-						 0,
-						 buf,
-						 size,
-						 fu_progress_get_child(progress),
-						 error))
+	/* the plugin cannot parse image B as a level 1 firmware file, because image B does not end
+	 * with the updater trailer; return the data of image B without parsing it */
+	if (!self->has_public_key) {
+		blob = fu_genesys_scaler_device_read_region(self,
+							    GENESYS_SCALER_BANK_SIZE,
+							    GENESYS_SCALER_BANK_SIZE,
+							    progress,
+							    error);
+		if (blob == NULL)
+			return NULL;
+		return fu_firmware_new_from_bytes(blob);
+	}
+
+	blob = fu_genesys_scaler_device_dump_firmware(device, progress, error);
+	if (blob == NULL)
 		return NULL;
-	fu_progress_step_done(progress);
-
-	/* success */
-	return g_bytes_new_take(g_steal_pointer(&buf), size);
+	firmware = g_object_new(fu_device_get_firmware_gtype(device), NULL);
+	if (!fu_firmware_parse_bytes(firmware, blob, 0x0, FU_FIRMWARE_PARSE_FLAG_NONE, error))
+		return NULL;
+	return g_steal_pointer(&firmware);
 }
 
 /* a level 0 image is payload + public-key, so only the payload is programmed; a level 1 image
@@ -2150,6 +2194,7 @@ fu_genesys_scaler_device_class_init(FuGenesysScalerDeviceClass *klass)
 	device_class->probe = fu_genesys_scaler_device_probe;
 	device_class->setup = fu_genesys_scaler_device_setup;
 	device_class->dump_firmware = fu_genesys_scaler_device_dump_firmware;
+	device_class->read_firmware = fu_genesys_scaler_device_read_firmware;
 	device_class->check_firmware = fu_genesys_scaler_device_check_firmware;
 	device_class->write_firmware = fu_genesys_scaler_device_write_firmware;
 	device_class->set_progress = fu_genesys_scaler_device_set_progress;
