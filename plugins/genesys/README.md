@@ -14,6 +14,9 @@ This plugin allows updating the Genesys Logic USB Hub devices.
 Additionally, this plugin allows updating the MStar Semiconductor Scaler connected via an I²C bus.
 
 * TSUM G
+* MST9U
+
+The MST9U is a level 1 part and reuses the `MSTAR_TSUM_G` instance ID prefix.
 
 ## Firmware Format
 
@@ -45,8 +48,23 @@ Additionally, some customized instance IDs are added. e.g.
 These devices also use custom GUID values for the Scaler, e.g.
 
 * `GENESYS_SCALER\MSTAR_TSUM_G&PUBKEY_B335BDCE-7073-5D0E-9BD3-9B69C1A6899F&PANELREV_RIM101`
+* `GENESYS_SCALER\VID_03F0&PID_0610&MSTAR_TSUM_G&PANELTYPE_EIM1`
 
-The Public Key is product-specific and is required to identify the product.
+The public key is product-specific. It identifies the product for scalers that report level 0.
+Scalers that report level 1, for example the MStar MST9U, have no public key. Their firmware
+file does not have a public key appended. The plugin does not verify a signature for either
+level. For level 0, the plugin only compares the appended key with the key that it reads
+from the scaler.
+
+A level 1 scaler reports a *firmware ID* instead of a version, e.g. `EIM121`. Its first four
+characters are the *panel type*, e.g. `EIM1`, and the last two change with each release. Only
+the panel type survives an update, so that is what the GUID uses. To limit the match to one
+product, the GUID also includes the vendor and product IDs of the hub. For level 0 scalers, the
+public key does this.
+
+The firmware ID is reported by the running firmware, not read from the panel. HP ships a
+separate image for each panel variant, but the firmware ID in the image header is the same for
+both variants of a release, so the parser does not use it to select an image.
 
 ## Quirk Use
 
@@ -227,6 +245,20 @@ Since 2.0.17
 ## Update Behavior
 
 The devices are independently updated at runtime using USB control transfers.
+
+The flash of an MST9U scaler holds two firmware images. Image A starts at 0x000000. Image B
+starts at 0x200000. The boot loader is at the start of image A.
+
+The boot loader selects the image with the newer version. It checks the CRC of that image.
+It also checks the RSA signature, unless the board disables this check in hardware. If a
+check fails, the boot loader starts the other image.
+
+The plugin writes updates to image B only. The update does not change the boot loader or
+image A. If image B is not valid, the boot loader starts image A.
+
+Some boards disable the version, CRC and signature checks in hardware. On these boards, a
+hardware register selects the image. The update can then have no effect. After an update,
+read the firmware ID from the device to make sure that the update was applied.
 
 The firmware is deployed when the device is in normal runtime mode, and the device will reset when the new firmware has been written.
 
