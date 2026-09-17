@@ -25,6 +25,7 @@
 #define GENESYS_SCALER_MSTAR_DATA_IN  0x7f
 
 #define GENESYS_SCALER_CMD_DDCCI_FIRMWARE_PACKET_VERSION 0x06
+#define GENESYS_SCALER_DDCCI_REPLY_FLAG_OFFSET		 0x05
 #define GENESYS_SCALER_PANEL_TYPE_LEN			 4
 
 #define GENESYS_SCALER_CMD_DATA_WRITE 0x10
@@ -1551,6 +1552,28 @@ fu_genesys_scaler_device_get_ddcci_info(FuGenesysScalerDevice *self,
 			return FALSE;
 		}
 
+		/* reply is [6F 6E 8n] CD 02 <flag> <idx> <data...>, a nonzero flag means the
+		 * scaler did not answer this info index; only checked for level 1 so the version
+		 * reported by level 0 parts cannot change */
+		if (self->level == 1) {
+			guint8 flag = 0;
+			if (!fu_memread_uint8_safe(buf,
+						   bufsz,
+						   GENESYS_SCALER_DDCCI_REPLY_FLAG_OFFSET,
+						   &flag,
+						   error))
+				return FALSE;
+			if (flag != 0x0) {
+				g_set_error(error,
+					    FWUPD_ERROR,
+					    FWUPD_ERROR_NOT_SUPPORTED,
+					    "info index 0x%02x not supported, got flag 0x%02x",
+					    cmd,
+					    flag);
+				return FALSE;
+			}
+		}
+
 		*offset = 7;
 	}
 
@@ -1593,6 +1616,7 @@ fu_genesys_scaler_device_probe(FuDevice *device, GError **error)
 	g_autofree gchar *guid = NULL;
 	g_autofree gchar *version = NULL;
 	g_autofree gchar *panelrev = NULL;
+	g_autoptr(GError) error_local = NULL;
 
 	if (!fu_genesys_scaler_device_get_level(self, &self->level, error))
 		return FALSE;
@@ -1634,10 +1658,21 @@ fu_genesys_scaler_device_probe(FuDevice *device, GError **error)
 	panelrev = fu_memstrsafe(buf, sizeof(buf), 0x1, 6, error);
 	if (panelrev == NULL)
 		return FALSE;
-	if (!fu_genesys_scaler_device_get_firmware_packet_version(self, &ver, error))
-		return FALSE;
 
-	version = g_strdup_printf("%d.%d.%d.%d", ver.stage, ver.model, ver.major, ver.minor);
+	/* not every scaler answers the packet version, so fall back to the reported ID; PLAIN
+	 * versions compare as strings, which orders correctly as the release is always two digits
+	 */
+	if (fu_genesys_scaler_device_get_firmware_packet_version(self, &ver, &error_local)) {
+		version =
+		    g_strdup_printf("%d.%d.%d.%d", ver.stage, ver.model, ver.major, ver.minor);
+	} else if (g_error_matches(error_local, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED)) {
+		g_info("no firmware packet version, using panel revision: %s",
+		       error_local->message);
+		version = g_strdup(panelrev);
+	} else {
+		g_propagate_error(error, g_steal_pointer(&error_local));
+		return FALSE;
+	}
 	fu_device_set_version(device, version);
 	fu_device_set_version_format(device, FWUPD_VERSION_FORMAT_PLAIN);
 	fu_device_set_logical_id(device, "scaler");
