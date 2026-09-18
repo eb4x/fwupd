@@ -1,5 +1,7 @@
 [PCI\DRIVER_xe]
 Plugin = igsc
+[PCI\DRIVER_i915]
+Plugin = igsc
 
 [PCI\VEN_8086&DEV_4905]
 Name = DG1
