@@ -301,6 +301,7 @@ fu_igsc_device_setup(FuDevice *device, GError **error)
 	FuIgscDevice *self = FU_IGSC_DEVICE(device);
 	g_autofree gchar *version = NULL;
 	g_autoptr(FuStructIgscFwVersion) st_fwversion = fu_struct_igsc_fw_version_new();
+	g_autoptr(GError) error_local = NULL;
 
 	/* connect to interface */
 	if (!fu_mei_device_connect(FU_MEI_DEVICE(self), FU_HECI_DEVICE_UUID_MCHI2, 0, error)) {
@@ -311,9 +312,17 @@ fu_igsc_device_setup(FuDevice *device, GError **error)
 					      FU_MKHI_ARBH_SVN_INFO_ENTRY_USAGE_ID_CSE_RBE,
 					      &self->svn_executing,
 					      &self->svn_min_allowed,
-					      error)) {
-		g_prefix_error_literal(error, "failed to get ARBH SVN: ");
-		return FALSE;
+					      &error_local)) {
+		/* DG2 firmware does not implement this; leaving both SVNs at zero disables the
+		 * checks in check_firmware(), and the firmware enforces the SVN itself when
+		 * flashing */
+		if (!g_error_matches(error_local, FWUPD_ERROR, FWUPD_ERROR_NOT_SUPPORTED)) {
+			g_propagate_prefixed_error(error,
+						   g_steal_pointer(&error_local),
+						   "failed to get ARBH SVN: ");
+			return FALSE;
+		}
+		g_debug("ignoring ARBH SVN: %s", error_local->message);
 	}
 
 	/* get current version */
