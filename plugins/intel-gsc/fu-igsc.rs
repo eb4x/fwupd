@@ -270,16 +270,6 @@ struct FuIgscFwuHeciEndReq {
     _reserved: u32le,
 }
 
-#[derive(Parse, Default)]
-#[repr(C, packed)]
-struct FuIgscFwuHeciEndRes {
-    command_id: FuIgscFwuHeciCommandId == End,
-    hdr_flags: FuIgscFwuHeciHdrFlags == IsResponse,
-    _hdr_reserved: [u8; 2],
-    status: FuIgscFwuHeciStatus,
-    _status_reserved: u32le,
-}
-
 // Data
 #[derive(New, Default)]
 #[repr(C, packed)]
