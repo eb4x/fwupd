@@ -481,9 +481,9 @@ fu_igsc_device_check_firmware(FuDevice *device,
 		return FALSE;
 	}
 
-	/* check SKU */
+	/* the image lists every SKU it supports, and both being zero means no restriction */
 	fw_hw_sku = fu_igsc_code_firmware_get_hw_sku(FU_IGSC_CODE_FIRMWARE(firmware));
-	if (self->hw_sku != fw_hw_sku) {
+	if ((self->hw_sku | fw_hw_sku) != 0 && (self->hw_sku & fw_hw_sku) == 0) {
 		g_set_error(error,
 			    FWUPD_ERROR,
 			    FWUPD_ERROR_NOT_SUPPORTED,
