@@ -265,29 +265,29 @@ fu_igsc_device_get_config(FuIgscDevice *self, GError **error)
 	if (!fu_igsc_heci_check_status(fu_igsc_fwu_heci_get_config_res_get_status(st_res), error))
 		return FALSE;
 
-	/* success */
-	/* hw_sku from HECI GetConfig may be a SKU index (e.g. G31 returns 0x3) or
-	 * already a bitmask (e.g. G21 returns 0x2). Normalize: power-of-2 = bitmask,
-	 * otherwise index -> (1u << index). */
+	/* GetConfig returns a SKU index but the IMGI partition of the image is a bitmask, and
+	 * the bit order does not follow the index order; this table matches igsc */
 	hw_sku_raw = fu_igsc_fwu_heci_get_config_res_get_hw_sku(st_res);
-	if (hw_sku_raw == 0) {
+	switch (hw_sku_raw) {
+	case FU_IGSC_HW_SKU_SOC1:
+		self->hw_sku = FU_IGSC_HW_SKU_MASK_SOC1;
+		break;
+	case FU_IGSC_HW_SKU_SOC2:
+		self->hw_sku = FU_IGSC_HW_SKU_MASK_SOC2;
+		break;
+	case FU_IGSC_HW_SKU_SOC3:
+		self->hw_sku = FU_IGSC_HW_SKU_MASK_SOC3;
+		break;
+	case FU_IGSC_HW_SKU_SOC4:
+		self->hw_sku = FU_IGSC_HW_SKU_MASK_SOC4;
+		break;
+	default:
+		/* no image will match, but the OPROM and data children are still usable */
+		g_warning("unknown hw_sku index 0x%x", hw_sku_raw);
 		self->hw_sku = 0;
-		g_debug("hw_sku unset: 0x0");
-	} else if ((hw_sku_raw & (hw_sku_raw - 1)) == 0) {
-		self->hw_sku = hw_sku_raw;
-		g_debug("hw_sku already bitmask: 0x%x", self->hw_sku);
-	} else {
-		if (hw_sku_raw >= 32) {
-			g_set_error(error,
-				    FWUPD_ERROR,
-				    FWUPD_ERROR_INVALID_DATA,
-				    "invalid hw_sku index: 0x%x",
-				    hw_sku_raw);
-			return FALSE;
-		}
-		self->hw_sku = 1u << hw_sku_raw;
-		g_debug("hw_sku index: 0x%x, bitmask: 0x%x", hw_sku_raw, self->hw_sku);
+		break;
 	}
+	g_debug("hw_sku index: 0x%x, bitmask: 0x%x", hw_sku_raw, self->hw_sku);
 
 	self->oprom_code_devid_enforcement =
 	    fu_igsc_fwu_heci_get_config_res_get_flags(st_res) &
