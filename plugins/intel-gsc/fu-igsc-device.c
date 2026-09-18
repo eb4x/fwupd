@@ -522,9 +522,8 @@ fu_igsc_device_check_firmware(FuDevice *device,
 static gboolean
 fu_igsc_device_update_end(FuIgscDevice *self, FuIgscFwuHeciPayloadType payload_type, GError **error)
 {
-	guint8 res_buf[FU_IGSC_FWU_HECI_END_RES_SIZE] = {0};
 	g_autoptr(FuIgscFwuHeciEndReq) st_req = fu_igsc_fwu_heci_end_req_new();
-	g_autoptr(FuIgscFwuHeciEndRes) st_res = NULL;
+	g_autoptr(GError) error_local = NULL;
 
 	/* connect to interface */
 	if (!fu_mei_device_connect(FU_MEI_DEVICE(self), FU_HECI_DEVICE_UUID_FWUPDATE, 0, error)) {
@@ -532,27 +531,26 @@ fu_igsc_device_update_end(FuIgscDevice *self, FuIgscFwuHeciPayloadType payload_t
 		return FALSE;
 	}
 
-	/* we are not expecting a reply */
-	if (payload_type == FU_IGSC_FWU_HECI_PAYLOAD_TYPE_GFX_FW ||
-	    payload_type == FU_IGSC_FWU_HECI_PAYLOAD_TYPE_FWDATA) {
-		fu_dump_raw(G_LOG_DOMAIN, "MEI-write", st_req->buf->data, st_req->buf->len);
-		return fu_mei_device_write(FU_MEI_DEVICE(self),
-					   st_req->buf->data,
-					   st_req->buf->len,
-					   FU_IGSC_DEVICE_MEI_WRITE_TIMEOUT,
-					   error);
+	/* igsc never reads a reply to END, and for the GFX firmware the device resets on
+	 * receipt so even the write can fail */
+	fu_dump_raw(G_LOG_DOMAIN, "MEI-write", st_req->buf->data, st_req->buf->len);
+	if (!fu_mei_device_write(FU_MEI_DEVICE(self),
+				 st_req->buf->data,
+				 st_req->buf->len,
+				 FU_IGSC_DEVICE_MEI_WRITE_TIMEOUT,
+				 &error_local)) {
+		if (payload_type != FU_IGSC_FWU_HECI_PAYLOAD_TYPE_GFX_FW) {
+			g_propagate_error(error, g_steal_pointer(&error_local));
+			return FALSE;
+		}
+		g_debug("ignoring failure to write end: %s", error_local->message);
 	}
-	if (!fu_igsc_device_command(self,
-				    st_req->buf->data,
-				    st_req->buf->len,
-				    res_buf,
-				    sizeof(res_buf),
-				    error))
-		return FALSE;
-	st_res = fu_igsc_fwu_heci_end_res_parse(res_buf, sizeof(res_buf), 0x0, error);
-	if (st_res == NULL)
-		return FALSE;
-	return fu_igsc_heci_check_status(fu_igsc_fwu_heci_end_res_get_status(st_res), error);
+
+	/* some firmware does reply, so drop the connection rather than leave a stale message for
+	 * the next command; the GFX firmware path reconnects anyway */
+	if (payload_type != FU_IGSC_FWU_HECI_PAYLOAD_TYPE_GFX_FW)
+		fu_mei_device_disconnect(FU_MEI_DEVICE(self));
+	return TRUE;
 }
 
 static gboolean
