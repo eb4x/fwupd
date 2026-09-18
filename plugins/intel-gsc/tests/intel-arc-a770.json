@@ -1,0 +1,43 @@
+{
+  "name": "Intel Arc A770",
+  "interactive": false,
+  "steps": [
+    {
+      "emulation-file": "@enumeration_datadir@/intel-arc-a770-setup.json",
+      "components": [
+        {
+          "name": "FwCode",
+          "protocol": "com.intel.gsc",
+          "version": "1.3266",
+          "guids": [
+            "4fe032b4-dce2-5209-a1fc-d2b16a4cd2de"
+          ]
+        },
+        {
+          "name": "FwData",
+          "protocol": "com.intel.gsc",
+          "version": "101.15",
+          "guids": [
+            "27fe049d-67be-5a91-b5b9-51d693bd70e7"
+          ]
+        },
+        {
+          "name": "OptionROM Code",
+          "protocol": "com.intel.gsc",
+          "version": "20.1073.0.0",
+          "guids": [
+            "7e0d4b2e-9284-538f-b086-18f89602e597"
+          ]
+        },
+        {
+          "name": "OptionROM Data",
+          "protocol": "com.intel.gsc",
+          "version": "20.1068.0.0",
+          "guids": [
+            "9be9b52b-7f86-55bb-b478-2ec368bf06b2"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -24,4 +24,5 @@ plugin_builtins += static_library(
   c_args: cargs,
   dependencies: plugin_deps,
 )
-device_tests += files('tests/intel-gsc.json')
+device_tests += files('tests/intel-arc-a770.json', 'tests/intel-gsc.json')
+enumeration_data += files('tests/intel-arc-a770-setup.json')
