@@ -34,6 +34,8 @@ struct _FuIgscDevice {
 #define HECI1_CSE_FS_MODE_MASK 0x3
 #define HECI1_CSE_FS_CP_MODE   0x3
 
+#define HECI1_CSE_FS_INITSTATE_COMPLETED_BIT	     (1 << 9)
+#define HECI1_CSE_FS_FWUPDATE_IN_PROGRESS_BIT	     (1 << 11)
 #define HECI1_CSE_FS_BACKGROUND_OPERATION_NEEDED_BIT (1 << 13)
 
 G_DEFINE_TYPE(FuIgscDevice, fu_igsc_device, FU_TYPE_HECI_DEVICE)
@@ -687,6 +689,42 @@ fu_igsc_device_reconnect_cb(FuDevice *device, gpointer user_data, GError **error
 }
 
 static gboolean
+fu_igsc_device_wait_update_idle_cb(FuDevice *device, gpointer user_data, GError **error)
+{
+	FuIgscDevice *self = FU_IGSC_DEVICE(device);
+	guint32 fw_status = 0;
+
+	if (!fu_igsc_device_get_fw_status(self, 1, &fw_status, error))
+		return FALSE;
+	if ((fw_status & HECI1_CSE_FS_INITSTATE_COMPLETED_BIT) == 0 ||
+	    (fw_status & HECI1_CSE_FS_FWUPDATE_IN_PROGRESS_BIT) != 0) {
+		g_set_error(error, FWUPD_ERROR, FWUPD_ERROR_BUSY, "FWSTS1 is 0x%x", fw_status);
+		return FALSE;
+	}
+	/* success */
+	return TRUE;
+}
+
+/* the firmware applies the update after END; igsc allows 300s for this */
+static gboolean
+fu_igsc_device_wait_update_idle(FuIgscDevice *self, GError **error)
+{
+	/* nothing to wait for, as with fu_device_sleep() */
+	if (fu_device_has_flag(FU_DEVICE(self), FWUPD_DEVICE_FLAG_EMULATED))
+		return TRUE;
+	if (!fu_device_retry_full(FU_DEVICE(self),
+				  fu_igsc_device_wait_update_idle_cb,
+				  600,
+				  500 /* ms */,
+				  NULL,
+				  error)) {
+		g_prefix_error_literal(error, "failed to wait for update to finish: ");
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static gboolean
 fu_igsc_device_wait_heci_finish_cb(FuDevice *device, gpointer user_data, GError **error)
 {
 	FuIgscDevice *self = FU_IGSC_DEVICE(device);
@@ -731,11 +769,12 @@ fu_igsc_device_write_blob(FuIgscDevice *self,
 		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_BUSY, 20, "reconnect");
 	} else {
 		fu_progress_set_id(progress, G_STRLOC);
+		fu_progress_add_flag(progress, FU_PROGRESS_FLAG_GUESSED);
 		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_BUSY, 1, "get-status");
 		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_WRITE, 1, "update-start");
-		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_WRITE, 96, "write-chunks");
+		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_WRITE, 90, "write-chunks");
 		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_WRITE, 1, "update-end");
-		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_BUSY, 0, "reconnect");
+		fu_progress_add_step(progress, FWUPD_STATUS_DEVICE_BUSY, 7, "wait");
 	}
 
 	/* need to get the new version in a loop? */
@@ -793,6 +832,8 @@ fu_igsc_device_write_blob(FuIgscDevice *self,
 			if (!fu_igsc_device_wait_for_version(self, error))
 				return FALSE;
 		}
+		if (!fu_igsc_device_wait_update_idle(self, error))
+			return FALSE;
 		if (!fu_device_retry_full(FU_DEVICE(self),
 					  fu_igsc_device_reconnect_cb,
 					  200,
@@ -819,6 +860,9 @@ fu_igsc_device_write_blob(FuIgscDevice *self,
 			if (!fu_igsc_device_wait_for_version(self, error))
 				return FALSE;
 		}
+	} else {
+		if (!fu_igsc_device_wait_update_idle(self, error))
+			return FALSE;
 	}
 	fu_progress_step_done(progress);
 
