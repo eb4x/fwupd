@@ -233,6 +233,40 @@ fu_igsc_oprom_device_prepare_firmware(FuDevice *device,
 }
 
 static gboolean
+fu_igsc_oprom_device_get_part(FuIgscOpromDevice *self,
+			      FuFirmware *firmware,
+			      gsize *offset,
+			      gsize *size,
+			      GError **error)
+{
+	FuIgscOpromIdx idx = self->payload_type == FU_IGSC_FWU_HECI_PAYLOAD_TYPE_OPROM_CODE
+				 ? FU_IGSC_OPROM_IDX_CODE
+				 : FU_IGSC_OPROM_IDX_DATA;
+	gsize end = fu_firmware_get_size(firmware);
+	g_autoptr(FuFirmware) img = fu_firmware_get_image_by_idx(firmware, idx, error);
+	g_autoptr(GPtrArray) imgs = NULL;
+
+	if (img == NULL)
+		return FALSE;
+
+	/* the images are contiguous, so the part ends where the next data or code image starts */
+	imgs = fu_firmware_get_images(firmware);
+	for (guint i = 0; i < imgs->len; i++) {
+		FuFirmware *img_tmp = g_ptr_array_index(imgs, i);
+		if (fu_firmware_get_offset(img_tmp) <= fu_firmware_get_offset(img))
+			continue;
+		if (fu_firmware_get_idx(img_tmp) == FU_IGSC_OPROM_IDX_CODE ||
+		    fu_firmware_get_idx(img_tmp) == FU_IGSC_OPROM_IDX_DATA) {
+			end = fu_firmware_get_offset(img_tmp);
+			break;
+		}
+	}
+	*offset = fu_firmware_get_offset(img);
+	*size = end - *offset;
+	return TRUE;
+}
+
+static gboolean
 fu_igsc_oprom_device_write_firmware(FuDevice *device,
 				    FuFirmware *firmware,
 				    FuProgress *progress,
@@ -243,15 +277,19 @@ fu_igsc_oprom_device_write_firmware(FuDevice *device,
 	FuDevice *proxy;
 	g_autoptr(FuStructIgscFwuHeciImageMetadata) st_md = NULL;
 	g_autoptr(GBytes) fw_info = NULL;
+	gsize part_offset = 0;
+	gsize part_size = 0;
 	g_autoptr(FuInputStream) partial_stream = NULL;
 	g_autoptr(FuInputStream) stream = NULL;
 
-	/* get image, with no padding bytes */
+	/* a file can carry both parts, each being the data or code image plus the images that
+	 * follow it up to the next one, so only send the part this device owns */
+	if (!fu_igsc_oprom_device_get_part(self, firmware, &part_offset, &part_size, error))
+		return FALSE;
 	stream = fu_firmware_get_stream(firmware, error);
 	if (stream == NULL)
 		return FALSE;
-	partial_stream =
-	    fu_partial_input_stream_new(stream, 0x0, fu_firmware_get_size(firmware), error);
+	partial_stream = fu_partial_input_stream_new(stream, part_offset, part_size, error);
 	if (partial_stream == NULL)
 		return FALSE;
 
