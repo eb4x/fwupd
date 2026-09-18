@@ -663,8 +663,10 @@ fu_igsc_device_write_chunks(FuIgscDevice *self,
 }
 
 /* the expectation is that it will fail eventually */
-static gboolean
-fu_igsc_device_wait_for_version(FuIgscDevice *self, GError **error)
+/* query the version until the reset makes it fail, so the driver notices the reset; the reset
+ * may already be over, so as in igsc no failure is not an error */
+static void
+fu_igsc_device_wait_for_version(FuIgscDevice *self)
 {
 	g_autoptr(FuStructIgscFwVersion) st_fwversion = fu_struct_igsc_fw_version_new();
 	for (guint i = 0; i < 20; i++) {
@@ -674,11 +676,10 @@ fu_igsc_device_wait_for_version(FuIgscDevice *self, GError **error)
 						    st_fwversion->buf->data,
 						    st_fwversion->buf->len,
 						    NULL))
-			return TRUE;
+			return;
 		fu_device_sleep(FU_DEVICE(self), 100);
 	}
-	g_set_error_literal(error, FWUPD_ERROR, FWUPD_ERROR_TIMED_OUT, "device did not reset");
-	return FALSE;
+	g_debug("device did not reset within the version queries");
 }
 
 static gboolean
@@ -828,10 +829,8 @@ fu_igsc_device_write_blob(FuIgscDevice *self,
 		fu_progress_step_done(progress);
 
 		/* wait for the fwu interface to reply with the version information */
-		if (cp_mode) {
-			if (!fu_igsc_device_wait_for_version(self, error))
-				return FALSE;
-		}
+		if (cp_mode)
+			fu_igsc_device_wait_for_version(self);
 		if (!fu_igsc_device_wait_update_idle(self, error))
 			return FALSE;
 		if (!fu_device_retry_full(FU_DEVICE(self),
@@ -856,10 +855,8 @@ fu_igsc_device_write_blob(FuIgscDevice *self,
 			g_prefix_error_literal(error, "failed to wait for reconnect: ");
 			return FALSE;
 		}
-		if (cp_mode) {
-			if (!fu_igsc_device_wait_for_version(self, error))
-				return FALSE;
-		}
+		if (cp_mode)
+			fu_igsc_device_wait_for_version(self);
 	} else {
 		if (!fu_igsc_device_wait_update_idle(self, error))
 			return FALSE;
