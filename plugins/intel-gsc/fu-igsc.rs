@@ -223,6 +223,21 @@ struct FuIgscFwuHeciGetConfigReq {
     _reserved: [u32le; 2],
 }
 
+// GetConfig returns an index, the IMGI partition of an image has one bit per SKU
+enum FuIgscHwSku {
+    Soc1,
+    Soc2,
+    Soc3,
+    Soc4,
+}
+
+enum FuIgscHwSkuMask {
+    Soc2 = 1 << 0,
+    Soc3 = 1 << 1,
+    Soc1 = 1 << 2,
+    Soc4 = 1 << 3,
+}
+
 #[repr(u32le)]
 enum FuIgscFwuHeciGetConfigFlags {
     None,
